@@ -1,56 +1,63 @@
 let previousTabId = null;
 let tabStates = new Map();
 
+// Handle tab switches
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
-    console.log("Tab changed. Current tab:", activeInfo.tabId);
-    
-    // Add a small delay to ensure content scripts are properly loaded
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
-    // Pause videos in the previous tab
-    if (previousTabId !== null) {
-        console.log("Attempting to pause videos in previous tab:", previousTabId);
-        try {
-            await new Promise((resolve, reject) => {
-                chrome.tabs.sendMessage(
-                    previousTabId,
-                    { action: "pauseVideos" },
-                    (response) => {
-                        if (chrome.runtime.lastError) {
-                            console.error("Error:", chrome.runtime.lastError.message);
-                            reject(chrome.runtime.lastError);
-                            return;
-                        }
-                        console.log("Videos paused in previous tab:", previousTabId);
-                        resolve(response);
-                    }
-                );
-            });
-        } catch (error) {
-            console.error("Failed to pause videos:", error);
+    await handleVideoState(previousTabId, 'pause');
+    await handleVideoState(activeInfo.tabId, 'resume');
+    previousTabId = activeInfo.tabId;
+});
+
+// Handle window focus changes
+chrome.windows.onFocusChanged.addListener(async (windowId) => {
+    const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (windowId === chrome.windows.WINDOW_ID_NONE) {
+        // Chrome window lost focus - pause videos
+        if (activeTab) {
+            await handleVideoState(activeTab.id, 'pause');
+        }
+    } else {
+        // Chrome window gained focus - resume videos
+        if (activeTab) {
+            await handleVideoState(activeTab.id, 'resume');
         }
     }
+});
 
-    // Resume videos in the newly activated tab
+// Handle window closing
+chrome.windows.onRemoved.addListener(async (windowId) => {
+    const tabs = await chrome.tabs.query({ windowId });
+    for (const tab of tabs) {
+        await handleVideoState(tab.id, 'pause');
+    }
+});
+
+async function handleVideoState(tabId, action) {
+    if (!tabId) return;
+
+    // Check if extension is enabled
+    const { isEnabled = true } = await chrome.storage.local.get('isEnabled');
+    if (!isEnabled) return;
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
     try {
         await new Promise((resolve, reject) => {
             chrome.tabs.sendMessage(
-                activeInfo.tabId,
-                { action: "resumeVideos" },
+                tabId,
+                { action: action + 'Videos' },
                 (response) => {
                     if (chrome.runtime.lastError) {
-                        console.error("Error:", chrome.runtime.lastError.message);
+                        console.error(`Error in tab ${tabId}:`, chrome.runtime.lastError.message);
                         reject(chrome.runtime.lastError);
                         return;
                     }
-                    console.log("Videos resumed in tab:", activeInfo.tabId);
+                    console.log(`Videos ${action}d in tab:`, tabId);
                     resolve(response);
                 }
             );
         });
     } catch (error) {
-        console.error("Failed to resume videos:", error);
+        console.error(`Failed to ${action} videos:`, error);
     }
-
-    previousTabId = activeInfo.tabId;
-});
+}
